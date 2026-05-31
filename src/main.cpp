@@ -10,6 +10,8 @@
 // measurement in meters with two decimals
 
 #include <Arduino.h>
+#include "TicManager.h"
+#include <ESP32Encoder.h>
 
 // --- Pins (adjust if you use others) ---
 static const int PIN_RX  = 17;   // Module TXD -> RX ESP32
@@ -24,9 +26,13 @@ const uint8_t CMD_LASER_ON[]  = {0xAA,0x00,0x01,0xBE,0x00,0x01,0x00,0x01,0xC1};
 const uint8_t CMD_LASER_OFF[] = {0xAA,0x00,0x01,0xBE,0x00,0x01,0x00,0x00,0xC0};
 const uint8_t CMD_QUICK[]     = {0xAA,0x00,0x00,0x22,0x00,0x01,0x00,0x00,0x23};
 const uint8_t CMD_READ_RES[]  = {0xAA,0x80,0x00,0x22,0xA2};
+const uint8_t CMD_CONTINUOUS[] = {0xAA,0x00,0x00,0x21,0x00,0x01,0x00,0x00,0x22}; // Continuous mode
 
 // --- State ---
 float lastMeters = NAN;
+
+// --- Encoder ---
+ESP32Encoder encoder;
 
 // --- Utilities ---
 static inline void enaHigh(){ pinMode(PIN_ENA,OUTPUT); digitalWrite(PIN_ENA,HIGH); }
@@ -79,6 +85,12 @@ void doQuick(){
   }
 }
 
+void doContinuous() {
+  while(LZR.available()) LZR.read();           // clear RX
+  LZR.write(CMD_CONTINUOUS, sizeof(CMD_CONTINUOUS)); LZR.flush();
+  Serial.println("CONTINUOUS MODE STARTED");
+}
+
 void doReset(){                                // R = "clear/reset"
   powerCycle();                                 // only resets the module
   while(LZR.available()) LZR.read();            // clear RX
@@ -86,13 +98,22 @@ void doReset(){                                // R = "clear/reset"
   Serial.println("OK RESET");
 }
 
+TicManager ticManager(0x0E); // Replace 0x0E with your Tic I2C address if different
+
 // --- Setup / Loop ---
 void setup(){
   Serial.begin(115200);
   enaHigh();
   LZR.begin(9600, SERIAL_8N1, PIN_RX, PIN_TX);
 
-  Serial.println("\nM01 ready: Q=measure  L=laser ON  K=laser OFF  R=reset");
+  // Initialize encoder (A=GPIO34, B=GPIO35) with full quadrature decoding for highest precision
+  ESP32Encoder::useInternalWeakPullResistors = puType::up; // Enable internal pull-up resistors
+  encoder.attachFullQuad(34, 35);
+  encoder.setCount(0);
+
+  ticManager.begin();
+
+  Serial.println("\nM01 ready: Q=measure  L=laser ON  K=laser OFF  R=reset  C=continuous");
 }
 
 void loop(){
@@ -102,7 +123,17 @@ void loop(){
     else if(c=='L') doLaserOn();
     else if(c=='K') doLaserOff();
     else if(c=='R') doReset();
+    else if(c=='C') doContinuous();
   }
   // in case frames arrive (e.g., continuous mode activated externally)
   if(LZR.available()) readMeters(200);
+
+  // --- Encoder position readout ---
+  static long lastPos = 0;
+  long newPos = encoder.getCount();
+  if (newPos != lastPos) {
+    Serial.print("Encoder position: ");
+    Serial.println(newPos);
+    lastPos = newPos;
+  }
 }
