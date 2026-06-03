@@ -18,6 +18,12 @@ static const int PIN_RX  = 17;   // Module TXD -> RX ESP32
 static const int PIN_TX  = 16;   // Module RXD <- TX ESP32
 static const int PIN_ENA = 5;    // ENA (HIGH = active)
 
+// Encoder pins: use pins with internal pull-ups if you want to rely on internal resistors.
+// GPIO34..39 are input-only and do NOT support internal pull-ups on many ESP32 modules,
+// so prefer GPIO32/GPIO33 or provide external 10k pull-ups to 3.3V if you must use 34/35.
+static const int ENC_PIN_A = 34; // change if needed
+static const int ENC_PIN_B = 35; // change if needed
+
 // --- UART ---
 HardwareSerial LZR(2);
 
@@ -75,6 +81,16 @@ bool readMeters(unsigned long ms){
 // --- Actions ---
 void doLaserOn(){  LZR.write(CMD_LASER_ON,  sizeof(CMD_LASER_ON));  LZR.flush(); }
 void doLaserOff(){ LZR.write(CMD_LASER_OFF, sizeof(CMD_LASER_OFF)); LZR.flush(); }
+void doStepPlus(TicManager* ticManager ,int steps)
+{
+  ticManager->clearDriverError();
+  ticManager->energize();
+  Serial.println("Tic Energized");
+  delay(400);
+  ticManager->setTargetPosition(steps);
+  delay(1000); // wait for movement to complete (adjust as needed)
+  ticManager->deenergize();
+}
 
 void doQuick(){
   while(LZR.available()) LZR.read();           // clear RX
@@ -98,7 +114,7 @@ void doReset(){                                // R = "clear/reset"
   Serial.println("OK RESET");
 }
 
-TicManager ticManager(0x0E); // Replace 0x0E with your Tic I2C address if different
+TicManager ticManager(0x0F); // Replace 0x0F with your Tic I2C address if different
 
 // --- Setup / Loop ---
 void setup(){
@@ -106,9 +122,11 @@ void setup(){
   enaHigh();
   LZR.begin(9600, SERIAL_8N1, PIN_RX, PIN_TX);
 
-  // Initialize encoder (A=GPIO34, B=GPIO35) with full quadrature decoding for highest precision
-  ESP32Encoder::useInternalWeakPullResistors = puType::up; // Enable internal pull-up resistors
-  encoder.attachFullQuad(34, 35);
+  // Initialize encoder (A/B) with full quadrature decoding for highest precision
+  // Ensure inputs have defined level: enable internal pull-ups on pins that support them
+  pinMode(ENC_PIN_A, INPUT_PULLUP);
+  pinMode(ENC_PIN_B, INPUT_PULLUP);
+  encoder.attachFullQuad(ENC_PIN_A, ENC_PIN_B);
   encoder.setCount(0);
 
   ticManager.begin();
@@ -117,6 +135,7 @@ void setup(){
 }
 
 void loop(){
+  ticManager.commandTimeout();
   if(Serial.available()){
     char c = toupper((unsigned char)Serial.read());
     if(c=='Q') doQuick();
@@ -124,12 +143,14 @@ void loop(){
     else if(c=='K') doLaserOff();
     else if(c=='R') doReset();
     else if(c=='C') doContinuous();
+    else if(c=='W') doStepPlus(&ticManager, 100); // example: move 100 steps forward on 'W' command
+    else if(c=='S') doStepPlus(&ticManager, 0); // example: move 100 steps backward on 'S' command
   }
   // in case frames arrive (e.g., continuous mode activated externally)
   if(LZR.available()) readMeters(200);
 
   // --- Encoder position readout ---
-  static long lastPos = 0;
+  static long lastPos = 0; // remember previous value to print only on change
   long newPos = encoder.getCount();
   if (newPos != lastPos) {
     Serial.print("Encoder position: ");
