@@ -81,16 +81,6 @@ bool readMeters(unsigned long ms){
 // --- Actions ---
 void doLaserOn(){  LZR.write(CMD_LASER_ON,  sizeof(CMD_LASER_ON));  LZR.flush(); }
 void doLaserOff(){ LZR.write(CMD_LASER_OFF, sizeof(CMD_LASER_OFF)); LZR.flush(); }
-void doStepPlus(TicManager* ticManager ,int steps)
-{
-  ticManager->clearDriverError();
-  ticManager->energize();
-  Serial.println("Tic Energized");
-  delay(400);
-  ticManager->setTargetPosition(steps);
-  delay(1000); // wait for movement to complete (adjust as needed)
-  ticManager->deenergize();
-}
 
 void doQuick(){
   while(LZR.available()) LZR.read();           // clear RX
@@ -101,10 +91,11 @@ void doQuick(){
   }
 }
 
-void doContinuous() {
+void doContinuous(TicManager& ticManager){
   while(LZR.available()) LZR.read();           // clear RX
   LZR.write(CMD_CONTINUOUS, sizeof(CMD_CONTINUOUS)); LZR.flush();
   Serial.println("CONTINUOUS MODE STARTED");
+  ticManager.requestMove(REQUEST_CONTINUOUS, 1);
 }
 
 void doReset(){                                // R = "clear/reset"
@@ -130,24 +121,31 @@ void setup(){
   encoder.setCount(0);
 
   ticManager.begin();
+  ticManager.setLimits(-50,300); // example limits
 
   Serial.println("\nM01 ready: Q=measure  L=laser ON  K=laser OFF  R=reset  C=continuous");
 }
 
 void loop(){
-  ticManager.commandTimeout();
+  ticManager.Run();
   if(Serial.available()){
     char c = toupper((unsigned char)Serial.read());
     if(c=='Q') doQuick();
     else if(c=='L') doLaserOn();
     else if(c=='K') doLaserOff();
     else if(c=='R') doReset();
-    else if(c=='C') doContinuous();
-    else if(c=='W') doStepPlus(&ticManager, 100); // example: move 100 steps forward on 'W' command
-    else if(c=='S') doStepPlus(&ticManager, 0); // example: move 100 steps backward on 'S' command
+    else if(c=='C') doContinuous(ticManager);
+    else if(c=='W') ticManager.requestMove(REQUEST_MOVE, -100); // example: move 1000 steps backward
+    else if(c=='S') ticManager.endContinuous();
+    else if(c=='D') ticManager.doStep(); // step in continuous mode
   }
   // in case frames arrive (e.g., continuous mode activated externally)
-  if(LZR.available()) readMeters(200);
+  if(LZR.available()) {
+   bool is_measured = readMeters(200);
+   if(is_measured) {
+     ticManager.doStep();
+   }
+  }
 
   // --- Encoder position readout ---
   static long lastPos = 0; // remember previous value to print only on change
@@ -157,4 +155,5 @@ void loop(){
     Serial.println(newPos);
     lastPos = newPos;
   }
+  delay(50); // small delay to avoid flooding the serial output
 }
